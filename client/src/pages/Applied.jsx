@@ -1,8 +1,9 @@
 import { useState, useEffect } from 'react'
-import { getAppliedJobs, getStats } from '../lib/api'
+import { useNavigate } from 'react-router-dom'
+import { getAppliedJobs, getSkippedJobs, unskipJob, getStats } from '../lib/api'
 import StatBar from '../components/StatBar'
 import EmptyState from '../components/EmptyState'
-import { MapPin, ExternalLink, Briefcase, Clock, TrendingUp, Building2, CheckCircle2 } from 'lucide-react'
+import { MapPin, ExternalLink, Briefcase, Clock, TrendingUp, Building2, CheckCircle2, Sparkles, X, ArrowRight, RotateCcw } from 'lucide-react'
 
 const SOURCE_STYLES = {
   linkedin:      { background: '#e8f0fe', color: '#1d4ed8' },
@@ -52,41 +53,23 @@ function formatAppliedDate(dateStr) {
 const CHIP_CLASSES = ['chip-0', 'chip-1', 'chip-2', 'chip-3', 'chip-4']
 
 export default function Applied() {
-  const [jobs, setJobs]     = useState([])
-  const [stats, setStats]   = useState(null)
-  const [loading, setLoading] = useState(true)
+  const navigate = useNavigate()
+  const [jobs, setJobs]         = useState([])
+  const [stats, setStats]       = useState(null)
+  const [loading, setLoading]   = useState(true)
+  const [optimizationJob, setOptimizationJob] = useState(null)
+  const [skippedJobs, setSkippedJobs] = useState([])
 
   useEffect(() => {
-    Promise.all([getAppliedJobs(), getStats()])
-      .then(([j, s]) => {
+    Promise.all([getAppliedJobs(), getStats(), getSkippedJobs()])
+      .then(([j, s, sk]) => {
         setJobs(j.data.jobs || [])
         setStats(s.data)
+        setSkippedJobs(sk.data.jobs || [])
         setLoading(false)
       })
       .catch(() => setLoading(false))
   }, [])
-
-  // Compute right panel stats
-  const avgScore = jobs.length
-    ? Math.round(jobs.reduce((sum, j) => sum + (parseInt(j.fit_score) || 0), 0) / jobs.length)
-    : 0
-
-  const sourceCounts = jobs.reduce((acc, j) => {
-    const src = (j.source || 'unknown').toLowerCase()
-    acc[src] = (acc[src] || 0) + 1
-    return acc
-  }, {})
-
-  const topCompanies = [...new Map(jobs.map(j => [j.company, j])).values()].slice(0, 6)
-
-  const tierCounts = jobs.reduce((acc, j) => {
-    const s = parseInt(j.fit_score) || 0
-    if (s >= 80) acc.strong++
-    else if (s >= 65) acc.good++
-    else if (s >= 45) acc.decent++
-    else acc.weak++
-    return acc
-  }, { strong: 0, good: 0, decent: 0, weak: 0 })
 
   return (
     <div style={{
@@ -99,7 +82,7 @@ export default function Applied() {
 
         {/* ── LEFT COLUMN — Applied job cards ── */}
         <div style={{
-          flex: 1, overflowY: 'auto',
+          flex: 1, maxWidth: 720, overflowY: 'auto',
           padding: '16px 20px 16px 24px',
           display: 'flex', flexDirection: 'column', gap: 10,
         }}>
@@ -158,6 +141,23 @@ export default function Applied() {
 
               const fitReason = job.fit_reason && job.fit_reason !== 'Could not score automatically.'
                 ? job.fit_reason : null
+
+              // Tailoring data
+              const hasTailoring = job.ats_score_before != null && job.ats_score_after != null
+              const tailoredSections = job.tailoring_sections
+                ? Object.keys(job.tailoring_sections).filter(k => job.tailoring_sections[k]?.improved)
+                : []
+              const keywordsAdded = tailoredSections
+                .flatMap(k => job.tailoring_sections[k]?.keywords_added || [])
+                .slice(0, 4)
+              const atsDiff = hasTailoring ? (job.ats_score_after - job.ats_score_before) : 0
+
+              const SECTION_COLORS = {
+                summary:    { bg: '#eef2ff', color: '#6366f1', border: '#c7d2fe' },
+                experience: { bg: '#eff6ff', color: '#2563eb', border: '#bfdbfe' },
+                skills:     { bg: '#f0fdf4', color: '#16a34a', border: '#bbf7d0' },
+                projects:   { bg: '#fdf4ff', color: '#9333ea', border: '#e9d5ff' },
+              }
 
               return (
                 <div
@@ -267,11 +267,74 @@ export default function Applied() {
                     </p>
                   </div>
 
-                  {/* DIVIDER */}
-                  <div style={{ borderTop: '1px solid var(--border-light)', margin: '0 0 12px' }} />
+                  {/* Resume Version Used label */}
+                  {hasTailoring && (
+                    <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 6 }}>
+                      Resume Version Used
+                    </div>
+                  )}
 
-                  {/* ROW 3 — fit reason */}
-                  {fitReason && (
+                  {/* ATS improvement row — only when tailoring exists */}
+                  {hasTailoring && (
+                    <div style={{
+                      display: 'flex', alignItems: 'center', gap: 10,
+                      background: '#f0fdf4', border: '1px solid #bbf7d0',
+                      borderRadius: 10, padding: '8px 14px', marginBottom: 12,
+                      flexWrap: 'wrap',
+                    }}>
+                      <Sparkles size={13} strokeWidth={2} color="#16a34a" />
+                      <span style={{ fontSize: 13, fontWeight: 700, color: '#166534' }}>ATS Score:</span>
+                      <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 14, fontWeight: 800, color: '#94a3b8' }}>
+                        {job.ats_score_before}
+                      </span>
+                      <span style={{ color: '#94a3b8', fontSize: 14 }}>→</span>
+                      <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 14, fontWeight: 800, color: '#16a34a' }}>
+                        {job.ats_score_after}
+                      </span>
+                      {atsDiff > 0 && (
+                        <span style={{
+                          background: '#dcfce7', color: '#15803d',
+                          borderRadius: 999, padding: '2px 9px',
+                          fontSize: 12, fontWeight: 800,
+                          border: '1px solid #bbf7d0',
+                        }}>
+                          +{atsDiff}
+                        </span>
+                      )}
+                      {tailoredSections.length > 0 && (
+                        <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap', marginLeft: 4 }}>
+                          {tailoredSections.map(sec => {
+                            const c = SECTION_COLORS[sec] || { bg: '#f8fafc', color: '#64748b', border: '#e2e8f0' }
+                            return (
+                              <span key={sec} style={{
+                                background: c.bg, color: c.color, border: `1px solid ${c.border}`,
+                                borderRadius: 999, padding: '2px 9px',
+                                fontSize: 11, fontWeight: 700, textTransform: 'capitalize',
+                              }}>{sec}</span>
+                            )
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Keywords added row */}
+                  {keywordsAdded.length > 0 && (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 12, flexWrap: 'wrap' }}>
+                      <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-muted)' }}>Keywords added:</span>
+                      {keywordsAdded.map((kw, i) => (
+                        <span key={i} style={{
+                          background: 'var(--indigo-soft)', color: 'var(--indigo)',
+                          border: '1px solid var(--indigo-border)',
+                          borderRadius: 999, padding: '2px 9px',
+                          fontSize: 11, fontWeight: 700,
+                        }}>+{kw}</span>
+                      ))}
+                    </div>
+                  )}
+
+                  {/* Fit reason */}
+                  {fitReason && !hasTailoring && (
                     <div style={{
                       background: 'var(--indigo-soft)', borderRadius: 10,
                       padding: '10px 14px', marginBottom: 12,
@@ -287,16 +350,17 @@ export default function Applied() {
                     </div>
                   )}
 
-                  {/* ROW 4 — chips + salary + view link */}
+                  {/* DIVIDER */}
+                  <div style={{ borderTop: '1px solid var(--border-light)', margin: '0 0 12px' }} />
+
+                  {/* ROW — chips + buttons */}
                   <div style={{
                     display: 'flex', justifyContent: 'space-between',
                     alignItems: 'center', flexWrap: 'wrap', gap: 8,
-                    paddingTop: 4,
-                    borderTop: '1px solid var(--border-light)',
                   }}>
                     {/* Chips */}
                     <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
-                      {chips.slice(0, 4).map((chip, i) => (
+                      {chips.slice(0, 3).map((chip, i) => (
                         <span
                           key={`${chip}-${i}`}
                           className={CHIP_CLASSES[i % CHIP_CLASSES.length]}
@@ -321,34 +385,59 @@ export default function Applied() {
                       )}
                     </div>
 
-                    {/* View link */}
-                    {job.apply_url && (
-                      <a
-                        href={job.apply_url}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        style={{
-                          display: 'flex', alignItems: 'center', gap: 6,
-                          fontSize: 13, fontWeight: 700,
-                          color: 'var(--indigo)', textDecoration: 'none',
-                          background: 'var(--indigo-soft)',
-                          border: '1px solid var(--indigo-border)',
-                          borderRadius: 10, padding: '7px 16px',
-                          flexShrink: 0,
-                        }}
-                        onMouseEnter={e => {
-                          e.currentTarget.style.background = 'var(--indigo)'
-                          e.currentTarget.style.color = '#fff'
-                        }}
-                        onMouseLeave={e => {
-                          e.currentTarget.style.background = 'var(--indigo-soft)'
-                          e.currentTarget.style.color = 'var(--indigo)'
-                        }}
-                      >
-                        <ExternalLink size={13} strokeWidth={2} />
-                        View Job
-                      </a>
-                    )}
+                    {/* Action buttons */}
+                    <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                      {hasTailoring && (
+                        <button
+                          onClick={() => setOptimizationJob(job)}
+                          style={{
+                            display: 'flex', alignItems: 'center', gap: 6,
+                            fontSize: 13, fontWeight: 700,
+                            color: 'var(--indigo)',
+                            background: 'var(--indigo-soft)',
+                            border: '1px solid var(--indigo-border)',
+                            borderRadius: 10, padding: '7px 14px',
+                            cursor: 'pointer',
+                            fontFamily: "'Plus Jakarta Sans', sans-serif",
+                          }}
+                          onMouseEnter={e => { e.currentTarget.style.background = 'var(--indigo)'; e.currentTarget.style.color = '#fff' }}
+                          onMouseLeave={e => { e.currentTarget.style.background = 'var(--indigo-soft)'; e.currentTarget.style.color = 'var(--indigo)' }}
+                        >
+                          <Sparkles size={13} strokeWidth={2} />
+                          View Optimization
+                        </button>
+                      )}
+                      {job.apply_url && (
+                        <a
+                          href={job.apply_url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          style={{
+                            display: 'flex', alignItems: 'center', gap: 6,
+                            fontSize: 13, fontWeight: 700,
+                            color: 'var(--text-muted)', textDecoration: 'none',
+                            background: 'var(--bg-soft)',
+                            border: '1px solid var(--border-medium)',
+                            borderRadius: 10, padding: '7px 14px',
+                          }}
+                          onMouseEnter={e => { e.currentTarget.style.background = 'var(--bg-page)'; e.currentTarget.style.color = 'var(--text-dark)' }}
+                          onMouseLeave={e => { e.currentTarget.style.background = 'var(--bg-soft)'; e.currentTarget.style.color = 'var(--text-muted)' }}
+                        >
+                          <ExternalLink size={13} strokeWidth={2} />
+                          View Job
+                        </a>
+                      )}
+                      <span style={{
+                        display: 'flex', alignItems: 'center', gap: 5,
+                        fontSize: 12, fontWeight: 700,
+                        background: 'var(--green-soft)', color: '#15803d',
+                        border: '1px solid var(--green-border)',
+                        borderRadius: 10, padding: '7px 14px',
+                      }}>
+                        <CheckCircle2 size={12} strokeWidth={2.5} />
+                        Applied
+                      </span>
+                    </div>
                   </div>
                 </div>
               )
@@ -357,198 +446,195 @@ export default function Applied() {
         </div>
 
         {/* ── RIGHT PANEL ── */}
-        <div style={{
-          width: 420, flexShrink: 0,
-          borderLeft: '1px solid var(--border-light)',
-          background: '#fff', overflowY: 'auto',
-          padding: 16, display: 'flex', flexDirection: 'column', gap: 14,
-        }}>
+        <div style={{ width: 380, flexShrink: 0, borderLeft: '1px solid var(--border-light)', background: '#fff', overflowY: 'auto', padding: '16px 0' }}>
 
-          {/* Card 1 — Big stat */}
-          <div style={{
-            background: 'linear-gradient(135deg, #10b981 0%, #059669 50%, #0d9488 100%)',
-            borderRadius: 16, padding: '24px 20px', textAlign: 'center',
-            boxShadow: '0 4px 20px rgba(16,185,129,0.3)',
-          }}>
-            <div style={{
-              fontFamily: "'JetBrains Mono', monospace",
-              fontWeight: 800, fontSize: 56, color: '#fff',
-              lineHeight: 1, letterSpacing: '-0.02em',
-            }}>
-              {jobs.length}
-            </div>
-            <div style={{
-              color: 'rgba(255,255,255,0.85)', fontWeight: 700,
-              fontSize: 15, marginTop: 8,
-            }}>
-              Jobs Applied
-            </div>
-            {avgScore > 0 && (
-              <div style={{
-                marginTop: 12,
-                background: 'rgba(255,255,255,0.2)',
-                borderRadius: 999, padding: '6px 18px',
-                display: 'inline-flex', alignItems: 'center', gap: 6,
-              }}>
-                <TrendingUp size={14} strokeWidth={2} color="#fff" />
-                <span style={{ color: '#fff', fontWeight: 700, fontSize: 14 }}>
-                  Avg fit score: {avgScore}
-                </span>
+          {/* Applied Jobs section */}
+          <div style={{ padding: '0 16px 16px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <span style={{ fontSize: 15, fontWeight: 800, color: 'var(--text-dark)' }}>Applied Jobs</span>
+                <span style={{ background: 'var(--green-soft)', color: '#15803d', border: '1px solid var(--green-border)', borderRadius: 999, padding: '2px 9px', fontSize: 12, fontWeight: 700 }}>{jobs.length}</span>
               </div>
-            )}
-          </div>
-
-          {/* Card 2 — Fit breakdown */}
-          {jobs.length > 0 && (
-            <div style={{
-              background: '#fff', borderRadius: 16,
-              border: '1px solid var(--border-light)',
-              padding: '16px 18px',
-              boxShadow: '0 1px 4px rgba(0,0,0,0.04)',
-            }}>
-              <div className="section-heading">Match Quality</div>
-              {[
-                { label: 'Strong Fit (80+)', count: tierCounts.strong, tier: FIT_TIER.strong },
-                { label: 'Good Fit (65–79)', count: tierCounts.good,   tier: FIT_TIER.good },
-                { label: 'Decent Fit (45–64)', count: tierCounts.decent, tier: FIT_TIER.decent },
-                { label: 'Weak Fit (<45)',   count: tierCounts.weak,   tier: FIT_TIER.weak },
-              ].map(({ label, count, tier }) => (
-                <div key={label} style={{
-                  display: 'flex', alignItems: 'center',
-                  justifyContent: 'space-between',
-                  padding: '8px 0',
-                  borderBottom: '1px solid var(--border-light)',
-                }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                    <div style={{
-                      width: 10, height: 10, borderRadius: '50%',
-                      background: tier.dot, flexShrink: 0,
-                    }} />
-                    <span style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-body)' }}>
-                      {label}
-                    </span>
-                  </div>
-                  <span style={{
-                    fontSize: 16, fontWeight: 800,
-                    background: tier.grad,
-                    WebkitBackgroundClip: 'text',
-                    WebkitTextFillColor: 'transparent',
-                    backgroundClip: 'text',
-                  }}>
-                    {count}
-                  </span>
-                </div>
-              ))}
+              <a href="/applied" style={{ fontSize: 12, fontWeight: 700, color: 'var(--indigo)', textDecoration: 'none' }}>View All →</a>
             </div>
-          )}
 
-          {/* Card 3 — Source breakdown */}
-          {Object.keys(sourceCounts).length > 0 && (
-            <div style={{
-              background: '#fff', borderRadius: 16,
-              border: '1px solid var(--border-light)',
-              padding: '16px 18px',
-              boxShadow: '0 1px 4px rgba(0,0,0,0.04)',
-            }}>
-              <div className="section-heading">Applied via</div>
-              {Object.entries(sourceCounts).map(([src, count]) => {
-                const srcStyle = SOURCE_STYLES[src] || { background: '#f0f2f8', color: 'var(--text-muted)' }
-                const total = jobs.length
-                const pct = Math.round((count / total) * 100)
-                return (
-                  <div key={src} style={{
-                    display: 'flex', alignItems: 'center', gap: 10,
-                    padding: '9px 0', borderBottom: '1px solid var(--border-light)',
-                  }}>
-                    <span style={{
-                      ...srcStyle, borderRadius: 999,
-                      padding: '4px 12px', fontSize: 12, fontWeight: 700,
-                      textTransform: 'capitalize', flexShrink: 0,
-                    }}>
-                      {src.charAt(0).toUpperCase() + src.slice(1)}
-                    </span>
-                    <div style={{ flex: 1, height: 6, background: 'var(--border-light)', borderRadius: 999, overflow: 'hidden' }}>
-                      <div style={{
-                        height: '100%', borderRadius: 999,
-                        background: srcStyle.color,
-                        width: `${pct}%`,
-                        opacity: 0.7,
-                      }} />
-                    </div>
-                    <span style={{ fontSize: 14, fontWeight: 800, color: 'var(--text-dark)', flexShrink: 0 }}>
-                      {count}
-                    </span>
-                  </div>
-                )
-              })}
+            {/* Table header */}
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr auto auto auto', gap: 8, padding: '6px 8px', background: 'var(--bg-soft)', borderRadius: 8, marginBottom: 6 }}>
+              <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Job</span>
+              <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em', whiteSpace: 'nowrap' }}>ATS</span>
+              <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em', whiteSpace: 'nowrap' }}>Applied</span>
+              <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}></span>
             </div>
-          )}
 
-          {/* Card 4 — Top companies */}
-          {topCompanies.length > 0 && (
-            <div style={{
-              background: '#fff', borderRadius: 16,
-              border: '1px solid var(--border-light)',
-              padding: '16px 18px',
-              boxShadow: '0 1px 4px rgba(0,0,0,0.04)',
-            }}>
-              <div className="section-heading" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                <Building2 size={13} strokeWidth={2} />
-                Companies
-              </div>
-              {topCompanies.map((j, i) => {
-                const avatarColors = [
-                  { bg: '#fdf2f8', color: '#ec4899', border: '#fbcfe8' },
-                  { bg: '#eff6ff', color: '#3b82f6', border: '#bfdbfe' },
-                  { bg: '#f0fdf4', color: '#22c55e', border: '#bbf7d0' },
-                  { bg: '#fff7ed', color: '#f97316', border: '#fed7aa' },
-                  { bg: '#f5f3ff', color: '#8b5cf6', border: '#ddd6fe' },
-                  { bg: '#fefce8', color: '#eab308', border: '#fde047' },
-                ]
-                const c = avatarColors[i % avatarColors.length]
-                return (
-                  <div key={j.company} style={{
-                    display: 'flex', alignItems: 'center', gap: 12,
-                    padding: '9px 0', borderBottom: '1px solid var(--border-light)',
-                  }}>
-                    <div style={{
-                      width: 34, height: 34, borderRadius: 10,
-                      background: c.bg, border: `1px solid ${c.border}`,
-                      display: 'flex', alignItems: 'center', justifyContent: 'center',
-                      fontWeight: 800, fontSize: 13, color: c.color, flexShrink: 0,
-                      fontFamily: "'Plus Jakarta Sans', sans-serif",
-                    }}>
-                      {(j.company || 'U')[0].toUpperCase()}
-                    </div>
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{
-                        fontWeight: 700, fontSize: 14, color: 'var(--text-dark)',
-                        overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-                      }}>
-                        {j.company || 'Unknown'}
-                      </div>
-                      <div style={{ fontSize: 12, fontWeight: 500, color: 'var(--text-muted)' }}>
-                        {j.location || 'Location unknown'}
-                      </div>
-                    </div>
-                    {j.apply_url && (
-                      <a
-                        href={j.apply_url}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        style={{ color: 'var(--indigo)', flexShrink: 0 }}
-                      >
-                        <ExternalLink size={14} strokeWidth={2} />
+            {jobs.slice(0, 8).map(job => {
+              const hasTail = job.ats_score_before != null && job.ats_score_after != null
+              const diff = hasTail ? job.ats_score_after - job.ats_score_before : 0
+              return (
+                <div key={job.id} style={{ display: 'grid', gridTemplateColumns: '1fr auto auto auto', gap: 8, alignItems: 'center', padding: '8px 8px', borderBottom: '1px solid var(--border-light)' }}>
+                  <div>
+                    <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-dark)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{job.title}</div>
+                    <div style={{ fontSize: 11, fontWeight: 500, color: 'var(--text-muted)' }}>{job.company}</div>
+                  </div>
+                  <div style={{ textAlign: 'center', minWidth: 80 }}>
+                    {hasTail ? (
+                      <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 11, fontWeight: 700 }}>
+                        <span style={{ color: '#94a3b8' }}>{job.ats_score_before}</span>
+                        <span style={{ color: '#94a3b8', margin: '0 2px' }}>→</span>
+                        <span style={{ color: '#16a34a' }}>{job.ats_score_after}</span>
+                        {diff > 0 && <span style={{ color: '#16a34a' }}> +{diff}</span>}
+                      </span>
+                    ) : <span style={{ fontSize: 11, color: 'var(--text-disabled)' }}>—</span>}
+                  </div>
+                  <div style={{ fontSize: 11, fontWeight: 500, color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>
+                    {job.applied_at ? new Date(job.applied_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' }) : '—'}
+                  </div>
+                  <div>
+                    {job.apply_url && (
+                      <a href={job.apply_url} target="_blank" rel="noopener noreferrer" style={{ color: 'var(--text-muted)', display: 'flex' }}>
+                        <ExternalLink size={13} strokeWidth={2} />
                       </a>
                     )}
                   </div>
-                )
-              })}
-            </div>
-          )}
+                </div>
+              )
+            })}
+            {jobs.length === 0 && !loading && <div style={{ padding: '16px 8px', fontSize: 13, color: 'var(--text-muted)', fontStyle: 'italic' }}>No applied jobs yet</div>}
+          </div>
 
+          <div style={{ height: 1, background: 'var(--border-light)', margin: '0 16px 16px' }} />
+
+          {/* Skipped Jobs section */}
+          <div style={{ padding: '0 16px 16px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <span style={{ fontSize: 15, fontWeight: 800, color: 'var(--text-dark)' }}>Skipped Jobs</span>
+                <span style={{ background: 'var(--orange-soft)', color: 'var(--orange)', border: '1px solid var(--orange-border)', borderRadius: 999, padding: '2px 9px', fontSize: 12, fontWeight: 700 }}>{skippedJobs.length}</span>
+              </div>
+              <a href="/skipped" style={{ fontSize: 12, fontWeight: 700, color: 'var(--indigo)', textDecoration: 'none' }}>View All →</a>
+            </div>
+
+            {/* Table header */}
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr auto auto auto', gap: 8, padding: '6px 8px', background: 'var(--bg-soft)', borderRadius: 8, marginBottom: 6 }}>
+              <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Job</span>
+              <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Reason</span>
+              <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em', whiteSpace: 'nowrap' }}>Skipped</span>
+              <span></span>
+            </div>
+
+            {skippedJobs.slice(0, 8).map(job => (
+              <div key={job.id} style={{ display: 'grid', gridTemplateColumns: '1fr auto auto auto', gap: 8, alignItems: 'center', padding: '8px 8px', borderBottom: '1px solid var(--border-light)' }}>
+                <div>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-dark)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{job.title}</div>
+                  <div style={{ fontSize: 11, fontWeight: 500, color: 'var(--text-muted)' }}>{job.company}</div>
+                </div>
+                <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--orange)', whiteSpace: 'nowrap', maxWidth: 90, overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                  {job.skip_reason || '—'}
+                </div>
+                <div style={{ fontSize: 11, fontWeight: 500, color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>
+                  {job.fetched_at ? new Date(job.fetched_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' }) : '—'}
+                </div>
+                <div>
+                  <button onClick={() => { unskipJob(job.id).then(() => setSkippedJobs(prev => prev.filter(j => j.id !== job.id))).catch(() => {}) }}
+                    style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)', display: 'flex', padding: 2 }}>
+                    <RotateCcw size={13} strokeWidth={2} />
+                  </button>
+                </div>
+              </div>
+            ))}
+            {skippedJobs.length === 0 && <div style={{ padding: '16px 8px', fontSize: 13, color: 'var(--text-muted)', fontStyle: 'italic' }}>No skipped jobs</div>}
+          </div>
         </div>
       </div>
+
+      {/* ── OPTIMIZATION DRAWER MODAL ── */}
+      {optimizationJob && (() => {
+        const oj = optimizationJob
+        const sections = oj.tailoring_sections
+          ? Object.keys(oj.tailoring_sections).filter(k => oj.tailoring_sections[k]?.improved)
+          : []
+        const allKeywords = sections.flatMap(k => oj.tailoring_sections[k]?.keywords_added || [])
+        const diff = (oj.ats_score_after || 0) - (oj.ats_score_before || 0)
+        return (
+          <div
+            style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}
+            onClick={e => { if (e.target === e.currentTarget) setOptimizationJob(null) }}
+          >
+            <div style={{ background: '#fff', borderRadius: 20, width: '100%', maxWidth: 560, maxHeight: '85vh', overflow: 'hidden', display: 'flex', flexDirection: 'column', boxShadow: '0 24px 80px rgba(0,0,0,0.2)' }}>
+              {/* Modal header */}
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '18px 24px', borderBottom: '1px solid var(--border-light)', flexShrink: 0 }}>
+                <div>
+                  <div style={{ fontSize: 16, fontWeight: 800, color: 'var(--text-dark)' }}>Applied Resume Optimization</div>
+                  <div style={{ fontSize: 12, fontWeight: 500, color: 'var(--text-muted)', marginTop: 2 }}>{oj.title} · {oj.company}</div>
+                </div>
+                <button onClick={() => setOptimizationJob(null)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)', display: 'flex' }}>
+                  <X size={20} strokeWidth={2} />
+                </button>
+              </div>
+              {/* Scrollable content */}
+              <div style={{ overflowY: 'auto', padding: '20px 24px', display: 'flex', flexDirection: 'column', gap: 18 }}>
+                {/* ATS card */}
+                <div style={{ background: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: 14, padding: '18px 20px' }}>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: '#166534', textTransform: 'uppercase', letterSpacing: '0.07em', marginBottom: 8 }}>ATS Improvement</div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                    <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 36, fontWeight: 800, color: '#94a3b8' }}>{oj.ats_score_before}</span>
+                    <span style={{ fontSize: 20, color: '#94a3b8' }}>→</span>
+                    <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 36, fontWeight: 800, color: '#16a34a' }}>{oj.ats_score_after}</span>
+                    {diff > 0 && (
+                      <span style={{ background: '#dcfce7', color: '#15803d', borderRadius: 999, padding: '4px 12px', fontSize: 13, fontWeight: 800, border: '1px solid #bbf7d0' }}>+{diff} Points Improvement</span>
+                    )}
+                  </div>
+                </div>
+                {/* Two columns */}
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+                  {/* Modified sections */}
+                  <div>
+                    <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-dark)', marginBottom: 10 }}>Modified Sections</div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                      {sections.length > 0 ? sections.map(sec => (
+                        <div key={sec} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                          <div style={{ width: 18, height: 18, borderRadius: '50%', background: '#dcfce7', border: '1px solid #bbf7d0', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                            <CheckCircle2 size={11} strokeWidth={2.5} color="#16a34a" />
+                          </div>
+                          <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-body)', textTransform: 'capitalize' }}>{sec} Customized</span>
+                        </div>
+                      )) : <span style={{ fontSize: 12, color: 'var(--text-muted)', fontStyle: 'italic' }}>No sections saved yet</span>}
+                    </div>
+                  </div>
+                  {/* Keywords */}
+                  <div>
+                    <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-dark)', marginBottom: 10 }}>Keywords Added</div>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                      {allKeywords.slice(0, 6).map((kw, i) => (
+                        <span key={i} style={{ background: 'var(--indigo-soft)', color: 'var(--indigo)', border: '1px solid var(--indigo-border)', borderRadius: 999, padding: '3px 10px', fontSize: 11, fontWeight: 700 }}>{kw}</span>
+                      ))}
+                      {allKeywords.length > 6 && (
+                        <span style={{ background: 'var(--bg-soft)', color: 'var(--text-muted)', border: '1px solid var(--border-light)', borderRadius: 999, padding: '3px 10px', fontSize: 11, fontWeight: 600 }}>+{allKeywords.length - 6} more</span>
+                      )}
+                      {allKeywords.length === 0 && <span style={{ fontSize: 12, color: 'var(--text-muted)', fontStyle: 'italic' }}>None saved</span>}
+                    </div>
+                  </div>
+                </div>
+                {/* Footer */}
+                {oj.tailored_at && (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, paddingTop: 4 }}>
+                    <span style={{ fontSize: 12, fontWeight: 500, color: 'var(--text-muted)' }}>Saved On</span>
+                    <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-body)' }}>
+                      {new Date(oj.tailored_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                    </span>
+                  </div>
+                )}
+                {/* CTA */}
+                <button
+                  onClick={() => { setOptimizationJob(null); navigate(`/tailor/${oj.id}`) }}
+                  style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, padding: '12px 0', borderRadius: 12, background: 'linear-gradient(135deg,#6366f1,#8b5cf6)', color: '#fff', fontWeight: 700, fontSize: 14, border: 'none', cursor: 'pointer', fontFamily: "'Plus Jakarta Sans', sans-serif", boxShadow: '0 4px 14px rgba(99,102,241,0.3)' }}
+                >
+                  View Full Suggestions <ArrowRight size={15} strokeWidth={2.5} />
+                </button>
+              </div>
+            </div>
+          </div>
+        )
+      })()}
     </div>
   )
 }

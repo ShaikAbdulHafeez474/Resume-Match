@@ -3,7 +3,7 @@ import { getSkippedJobs, unskipJob, getStats } from '../lib/api'
 import StatBar from '../components/StatBar'
 import EmptyState from '../components/EmptyState'
 import { toast } from 'sonner'
-import { MapPin, RotateCcw, SkipForward, Briefcase, Clock, TrendingUp } from 'lucide-react'
+import { MapPin, RotateCcw, SkipForward, Briefcase, Clock, TrendingUp, ExternalLink } from 'lucide-react'
 
 const SOURCE_STYLES = {
   linkedin:  { background: '#e8f0fe', color: '#1d4ed8' },
@@ -100,7 +100,7 @@ export default function Skipped() {
 
         {/* ── LEFT COLUMN ── */}
         <div style={{
-          flex: 1, overflowY: 'auto',
+          flex: 1, maxWidth: 720, overflowY: 'auto',
           padding: '16px 20px 16px 24px',
           display: 'flex', flexDirection: 'column', gap: 10,
         }}>
@@ -186,7 +186,7 @@ export default function Skipped() {
                     display: 'flex', justifyContent: 'space-between',
                     alignItems: 'center', marginBottom: 12,
                   }}>
-                    <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                    <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
                       <span style={{
                         ...srcStyle, borderRadius: 999,
                         padding: '4px 12px', fontSize: 12, fontWeight: 700,
@@ -218,6 +218,7 @@ export default function Skipped() {
                       <span style={{
                         display: 'flex', alignItems: 'center', gap: 4,
                         color: 'var(--text-muted)', fontSize: 12, fontWeight: 500,
+                        flexShrink: 0,
                       }}>
                         <Clock size={11} strokeWidth={1.5} />
                         {formatDate(job.posted_at)}
@@ -250,8 +251,22 @@ export default function Skipped() {
                       </p>
                     </div>
 
-                    {/* Right: score + restore */}
+                    {/* Right: score + ATS before (if any) + view job + restore */}
                     <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0 }}>
+                      {/* ATS before — only shown if tailoring exists */}
+                      {job.ats_score_before != null && (
+                        <div style={{
+                          background: '#f8fafc', borderRadius: 10,
+                          padding: '6px 10px', textAlign: 'center',
+                          border: '1px solid var(--border-light)',
+                        }}>
+                          <div style={{ fontFamily: "'JetBrains Mono', monospace", fontWeight: 800, fontSize: 18, lineHeight: 1, color: '#94a3b8' }}>
+                            {job.ats_score_before}
+                          </div>
+                          <div style={{ fontSize: 9, fontWeight: 700, color: 'var(--text-muted)', marginTop: 1, letterSpacing: '0.06em' }}>ATS</div>
+                        </div>
+                      )}
+
                       <div style={{
                         background: tier.bg, borderRadius: 12,
                         padding: '8px 12px', textAlign: 'center',
@@ -275,6 +290,14 @@ export default function Skipped() {
                           {tier.label}
                         </div>
                       </div>
+
+                      {/* View Job button */}
+                      {job.apply_url && (
+                        <a href={job.apply_url} target="_blank" rel="noopener noreferrer"
+                          style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '9px 16px', borderRadius: 10, background: 'var(--bg-soft)', border: '1px solid var(--border-medium)', color: 'var(--text-body)', fontWeight: 700, fontSize: 13, textDecoration: 'none' }}>
+                          <ExternalLink size={13} strokeWidth={2} /> View Job
+                        </a>
+                      )}
 
                       {/* Restore button */}
                       <button
@@ -310,7 +333,36 @@ export default function Skipped() {
                     </div>
                   </div>
 
-                  {/* ROW 3 — chips (if any) */}
+                  {/* ROW 3 — Skip Reason + Missing Skills */}
+                  {(job.skip_reason || (job.tailoring_sections && Object.keys(job.tailoring_sections).length > 0)) && (
+                    <div style={{ display: 'flex', gap: 20, marginBottom: 12, paddingBottom: 12, borderBottom: '1px solid var(--border-light)' }}>
+                      {/* Skip Reason column */}
+                      {job.skip_reason && (
+                        <div>
+                          <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 6 }}>Skip Reason</div>
+                          <span style={{ background: 'var(--orange-soft)', color: 'var(--orange)', border: '1px solid var(--orange-border)', borderRadius: 999, padding: '4px 12px', fontSize: 12, fontWeight: 700 }}>
+                            {job.skip_reason}
+                          </span>
+                        </div>
+                      )}
+                      {/* Missing Skills column — only if tailoring exists with skills section */}
+                      {job.tailoring_sections?.skills?.keywords_added?.length > 0 && (
+                        <div>
+                          <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 6 }}>Missing Core Skills</div>
+                          <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap' }}>
+                            {job.tailoring_sections.skills.keywords_added.slice(0, 3).map((kw, i) => (
+                              <span key={i} style={{ background: 'var(--bg-soft)', color: 'var(--text-body)', border: '1px solid var(--border-medium)', borderRadius: 8, padding: '4px 10px', fontSize: 11, fontWeight: 600 }}>{kw}</span>
+                            ))}
+                            {job.tailoring_sections.skills.keywords_added.length > 3 && (
+                              <span style={{ background: 'var(--bg-soft)', color: 'var(--text-muted)', border: '1px solid var(--border-light)', borderRadius: 8, padding: '4px 10px', fontSize: 11 }}>+{job.tailoring_sections.skills.keywords_added.length - 3}</span>
+                            )}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* ROW 4 — chips (if any) */}
                   {chips.length > 0 && (
                     <>
                       <div style={{ borderTop: '1px solid var(--border-light)', margin: '0 0 10px' }} />

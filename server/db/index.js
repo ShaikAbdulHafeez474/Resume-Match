@@ -12,7 +12,6 @@ const pool = new Pool({
 async function initDB() {
   await pool.query(`
 
-    -- ── USERS ──────────────────────────────────────────────────────────
     CREATE TABLE IF NOT EXISTS users (
       id                SERIAL PRIMARY KEY,
       clerk_id          VARCHAR(255) UNIQUE NOT NULL,
@@ -23,9 +22,6 @@ async function initDB() {
       last_seen         TIMESTAMP DEFAULT NOW()
     );
 
-    -- ── RESUMES ────────────────────────────────────────────────────────
-    -- One user can have multiple resume versions
-    -- content_hash prevents duplicate processing of same PDF
     CREATE TABLE IF NOT EXISTS resumes (
       id             SERIAL PRIMARY KEY,
       user_id        INTEGER REFERENCES users(id) ON DELETE CASCADE,
@@ -39,9 +35,6 @@ async function initDB() {
       UNIQUE(user_id, content_hash)
     );
 
-    -- ── JOBS ───────────────────────────────────────────────────────────
-    -- Jobs belong to USER not resume
-    -- Same job never fetched twice per user via UNIQUE(user_id, external_id)
     CREATE TABLE IF NOT EXISTS jobs (
       id             SERIAL PRIMARY KEY,
       user_id        INTEGER REFERENCES users(id) ON DELETE CASCADE,
@@ -67,7 +60,6 @@ async function initDB() {
       UNIQUE(user_id, external_id)
     );
 
-    -- ── FETCH HISTORY ──────────────────────────────────────────────────
     CREATE TABLE IF NOT EXISTS fetch_history (
       id            SERIAL PRIMARY KEY,
       user_id       INTEGER REFERENCES users(id) ON DELETE CASCADE,
@@ -80,35 +72,56 @@ async function initDB() {
       manual_query  VARCHAR(255)
     );
 
+    -- Stores per-job resume tailoring results
+    CREATE TABLE IF NOT EXISTS job_tailoring (
+      id               SERIAL PRIMARY KEY,
+      user_id          INTEGER REFERENCES users(id) ON DELETE CASCADE,
+      job_id           INTEGER REFERENCES jobs(id) ON DELETE CASCADE,
+      jd_text          TEXT,
+      ats_score_before INTEGER DEFAULT 0,
+      ats_score_after  INTEGER DEFAULT 0,
+      sections         JSONB NOT NULL DEFAULT '{}',
+      created_at       TIMESTAMP DEFAULT NOW(),
+      updated_at       TIMESTAMP DEFAULT NOW(),
+      UNIQUE(user_id, job_id)
+    );
+
+    -- Tracks user actions on jobs (applied, skipped, saved, restored)
+    CREATE TABLE IF NOT EXISTS job_actions (
+      id          SERIAL PRIMARY KEY,
+      user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      job_id      INTEGER NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+      action_type VARCHAR(50) NOT NULL,
+      skip_reason VARCHAR(255),
+      created_at  TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_job_actions_user_job  ON job_actions(user_id, job_id);
+    CREATE INDEX IF NOT EXISTS idx_job_actions_user_type ON job_actions(user_id, action_type);
+
   `);
+
+  // Idempotent migrations
+  await pool.query(`ALTER TABLE jobs ADD COLUMN IF NOT EXISTS skip_reason VARCHAR(255)`);
+  await pool.query(`ALTER TABLE job_tailoring ADD COLUMN IF NOT EXISTS missing_keywords JSONB`);
+
   console.log('✅ Database ready');
 }
 
-// Hash resume text for deduplication
 function hashText(text) {
   return crypto.createHash('sha256').update(text).digest('hex');
 }
 
-// Find or create user from Clerk data
 async function findOrCreateUser(clerkId, email, name) {
-  const existing = await pool.query(
-    'SELECT * FROM users WHERE clerk_id = $1', [clerkId]
-  );
+  const existing = await pool.query('SELECT * FROM users WHERE clerk_id = $1', [clerkId]);
   if (existing.rows.length > 0) {
-    await pool.query(
-      'UPDATE users SET last_seen = NOW(), email = $2, name = $3 WHERE clerk_id = $1',
-      [clerkId, email, name]
-    );
+    await pool.query('UPDATE users SET last_seen = NOW(), email = $2, name = $3 WHERE clerk_id = $1', [clerkId, email, name]);
     return existing.rows[0];
   }
-  const result = await pool.query(
-    `INSERT INTO users (clerk_id, email, name) VALUES ($1, $2, $3) RETURNING *`,
-    [clerkId, email, name]
-  );
+  const result = await pool.query(`INSERT INTO users (clerk_id, email, name) VALUES ($1, $2, $3) RETURNING *`, [clerkId, email, name]);
   return result.rows[0];
 }
 
-// Get user's active resume
 async function getActiveResume(userId) {
   const result = await pool.query(
     `SELECT * FROM resumes WHERE user_id = $1 AND is_active = true ORDER BY created_at DESC LIMIT 1`,
@@ -117,12 +130,8 @@ async function getActiveResume(userId) {
   return result.rows[0] || null;
 }
 
-// Deactivate all resumes for user
 async function deactivateResumes(userId) {
-  await pool.query(
-    'UPDATE resumes SET is_active = false WHERE user_id = $1',
-    [userId]
-  );
+  await pool.query('UPDATE resumes SET is_active = false WHERE user_id = $1', [userId]);
 }
 
 module.exports = { pool, initDB, hashText, findOrCreateUser, getActiveResume, deactivateResumes };

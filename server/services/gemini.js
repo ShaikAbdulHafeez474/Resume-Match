@@ -2,30 +2,78 @@ const { GoogleGenerativeAI } = require('@google/generative-ai');
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
-// For resume analysis — smarter, handles complex understanding
+// Model tier definitions — ordered from fastest/cheapest to most capable
+const scoringModel  = genAI.getGenerativeModel({ model: 'gemini-2.5-flash-lite' });
 const analysisModel = genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
+const proModel      = genAI.getGenerativeModel({ model: 'gemini-2.5-pro' });
 
-// For job scoring — faster, cheaper, runs in batches
-const scoringModel = genAI.getGenerativeModel({ model: 'gemini-2.5-flash-lite' });
+// Fallback chains used throughout this module
+const ANALYSIS_MODELS = [analysisModel, proModel];        // flash  → pro
+const SCORING_MODELS  = [scoringModel, analysisModel, proModel]; // lite → flash → pro
 
-async function generateWithRetry(model, prompt, retries = 3) {
-  for (let i = 0; i < retries; i++) {
-    try {
-      const result = await model.generateContent(prompt);
-      return result;
-    } catch (err) {
-      const isRateLimit = err.message?.includes('429') ||
-                          err.message?.includes('quota') ||
-                          err.message?.includes('Too Many Requests');
-      if (isRateLimit && i < retries - 1) {
-        const delay = 60000;
-        console.log(`Rate limit hit. Waiting 60s before retry ${i + 1}...`);
-        await new Promise(r => setTimeout(r, delay));
-      } else {
-        throw err;
+const MODEL_NAMES = new Map([
+  [scoringModel,  'gemini-2.5-flash-lite'],
+  [analysisModel, 'gemini-2.5-flash'],
+  [proModel,      'gemini-2.5-pro'],
+]);
+
+function isOverloadedError(err) {
+  const msg = (err?.message || err?.toString() || '').toLowerCase();
+  return (
+    msg.includes('503') ||
+    msg.includes('overloaded') ||
+    msg.includes('high demand') ||
+    msg.includes('model is busy') ||
+    msg.includes('service unavailable') ||
+    msg.includes('unavailable') ||
+    err?.status === 503
+  );
+}
+
+function isRateLimitError(err) {
+  const msg = (err?.message || err?.toString() || '').toLowerCase();
+  return (
+    msg.includes('429') ||
+    msg.includes('quota') ||
+    msg.includes('too many requests') ||
+    msg.includes('resource_exhausted')
+  );
+}
+
+/**
+ * Try each model in the chain in order.
+ * - On overload/busy → immediately skip to next model in chain.
+ * - On rate limit    → wait 60 s and retry the same model (up to `retries` times).
+ * - On other errors  → throw immediately.
+ */
+async function generateWithRetry(models, prompt, retries = 3) {
+  const chain = Array.isArray(models) ? models : [models];
+
+  for (let mi = 0; mi < chain.length; mi++) {
+    const model    = chain[mi];
+    const name     = MODEL_NAMES.get(model) || `model[${mi}]`;
+    const isLast   = mi === chain.length - 1;
+
+    for (let attempt = 0; attempt < retries; attempt++) {
+      try {
+        const result = await model.generateContent(prompt);
+        if (mi > 0) console.log(`[gemini] Used fallback model: ${name}`);
+        return result;
+      } catch (err) {
+        if (isOverloadedError(err)) {
+          console.warn(`[gemini] ${name} is overloaded/busy.${isLast ? ' No more fallbacks.' : ` Trying next model...`}`);
+          break; // move to next model in chain
+        } else if (isRateLimitError(err) && attempt < retries - 1) {
+          console.log(`[gemini] ${name} rate-limited. Waiting 60 s before retry ${attempt + 1}/${retries - 1}...`);
+          await new Promise(r => setTimeout(r, 60000));
+        } else {
+          throw err;
+        }
       }
     }
   }
+
+  throw new Error('All Gemini models are unavailable. Please try again later.');
 }
 
 async function analyzeResume(resumeText) {
@@ -63,15 +111,34 @@ Respond ONLY with valid JSON — no markdown, no explanation outside the JSON.
   ],
   "preferred_locations": ["<location1>", "<location2>"],
   "open_to_remote": <true|false>,
-  "summary": "<2-3 sentence professional summary of the candidate>"
+  "summary": "<2-3 sentence professional summary of the candidate>",
+  "experience": [
+    {
+      "title": "<job title>",
+      "company": "<company name>",
+      "duration": "<dates or duration>",
+      "bullets": ["<achievement bullet 1>", "<achievement bullet 2>"]
+    }
+  ],
+  "projects": [
+    {
+      "name": "<project name>",
+      "technologies": ["<tech1>", "<tech2>"],
+      "bullets": ["<project bullet 1>", "<project bullet 2>"],
+      "description": "<optional one-line description>"
+    }
+  ]
 }
+
+Extract ALL experience entries and ALL projects with their exact bullet points from the resume.
+Do not skip or summarize bullets — preserve the actual content.
 
 For search_queries: generate 5 specific, varied search terms that would find the best matching jobs on LinkedIn/Indeed.
 Make them specific — not generic like "software engineer" but targeted like "AI Engineer LLM India" or "Node.js React Full Stack fresher".
   `;
 
   try {
-    const result = await generateWithRetry(analysisModel, prompt);
+    const result = await generateWithRetry(ANALYSIS_MODELS, prompt);
     const text = result.response.text().trim();
     const jsonMatch = text.match(/\{[\s\S]*\}/);
     if (!jsonMatch) throw new Error('Gemini returned no JSON object');
@@ -143,7 +210,7 @@ Scoring guide:
     `;
 
     try {
-      const result = await generateWithRetry(scoringModel, prompt);
+      const result = await generateWithRetry(SCORING_MODELS, prompt);
       const text = result.response.text().trim();
       const jsonMatch = text.match(/\[[\s\S]*\]/);
       if (!jsonMatch) throw new Error('Gemini returned no JSON array');
@@ -184,4 +251,9 @@ Scoring guide:
   return results;
 }
 
-module.exports = { analyzeResume, scoreJobsAgainstResume };
+async function coachWithContext({ prompt }) {
+  const result = await generateWithRetry(ANALYSIS_MODELS, prompt);
+  return result.response.text().trim();
+}
+
+module.exports = { analyzeResume, scoreJobsAgainstResume, coachWithContext };

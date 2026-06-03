@@ -5,9 +5,11 @@ const path     = require('path');
 const fs       = require('fs');
 const { clerkMiddleware, requireAuth, getAuth } = require('@clerk/express');
 const { initDB } = require('./db');
-const resumeRoutes = require('./routes/resume');
-const jobRoutes    = require('./routes/jobs');
-const authRoutes   = require('./routes/auth');
+const resumeRoutes        = require('./routes/resume');
+const jobRoutes           = require('./routes/jobs');
+const authRoutes          = require('./routes/auth');
+const dashboardRoutes     = require('./routes/dashboard');
+const optimizationsRoutes = require('./routes/optimizations');
 
 const app  = express();
 const PORT = process.env.PORT || 5000;
@@ -20,9 +22,11 @@ app.use(express.json());
 app.use(clerkMiddleware());
 
 // Routes
-app.use('/api/auth',   authRoutes);
-app.use('/api/resume', resumeRoutes);
-app.use('/api/jobs',   jobRoutes);
+app.use('/api/auth',          authRoutes);
+app.use('/api/resume',        resumeRoutes);
+app.use('/api/jobs',          jobRoutes);
+app.use('/api/dashboard',     dashboardRoutes);
+app.use('/api/optimizations', optimizationsRoutes);
 app.get('/api/health', (_, res) => res.json({ status: 'ok' }));
 
 // Uploads directory
