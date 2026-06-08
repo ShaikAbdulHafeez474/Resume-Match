@@ -61,7 +61,8 @@ export const getSavedOptimizations = ()         => api.get('/jobs/saved-optimiza
 
 // ── Dashboard ─────────────────────────────────────────────────────────────
 export const getDashboardStats  = ()     => api.get('/dashboard/stats')
-export const getRecentActivity  = ()     => api.get('/dashboard/recent-activity')
+export const getRecentActivity = (all = false) =>
+  api.get(`/dashboard/recent-activity${all ? '?all=true' : ''}`)
 export const getAtsTrend        = ()     => api.get('/dashboard/ats-trend')
 export const getTopSkills       = ()     => api.get('/dashboard/top-skills')
 

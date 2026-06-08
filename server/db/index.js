@@ -11,7 +11,6 @@ const pool = new Pool({
 
 async function initDB() {
   await pool.query(`
-
     CREATE TABLE IF NOT EXISTS users (
       id                SERIAL PRIMARY KEY,
       clerk_id          VARCHAR(255) UNIQUE NOT NULL,
@@ -72,7 +71,6 @@ async function initDB() {
       manual_query  VARCHAR(255)
     );
 
-    -- Stores per-job resume tailoring results
     CREATE TABLE IF NOT EXISTS job_tailoring (
       id               SERIAL PRIMARY KEY,
       user_id          INTEGER REFERENCES users(id) ON DELETE CASCADE,
@@ -86,7 +84,6 @@ async function initDB() {
       UNIQUE(user_id, job_id)
     );
 
-    -- Tracks user actions on jobs (applied, skipped, saved, restored)
     CREATE TABLE IF NOT EXISTS job_actions (
       id          SERIAL PRIMARY KEY,
       user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -99,9 +96,18 @@ async function initDB() {
     CREATE INDEX IF NOT EXISTS idx_job_actions_user_job  ON job_actions(user_id, job_id);
     CREATE INDEX IF NOT EXISTS idx_job_actions_user_type ON job_actions(user_id, action_type);
 
+    CREATE TABLE IF NOT EXISTS skills_frequency (
+      id         SERIAL PRIMARY KEY,
+      user_id    INTEGER REFERENCES users(id) ON DELETE CASCADE,
+      skill_name VARCHAR(255) NOT NULL,
+      frequency  INTEGER DEFAULT 1,
+      updated_at TIMESTAMP DEFAULT NOW(),
+      UNIQUE(user_id, skill_name)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_skills_frequency_user ON skills_frequency(user_id, frequency DESC);
   `);
 
-  // Idempotent migrations
   await pool.query(`ALTER TABLE jobs ADD COLUMN IF NOT EXISTS skip_reason VARCHAR(255)`);
   await pool.query(`ALTER TABLE job_tailoring ADD COLUMN IF NOT EXISTS missing_keywords JSONB`);
 

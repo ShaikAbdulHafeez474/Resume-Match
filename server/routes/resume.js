@@ -8,10 +8,7 @@ const { pool, hashText, getActiveResume, deactivateResumes } = require('../db');
 const { extractTextFromPDF } = require('../services/pdfExtract');
 const { analyzeResume, coachWithContext } = require('../services/gemini');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
-const {
-  buildResumeContext,
-  buildCoachPrompt,
-} = require('../services/resumeContext');
+const { buildResumeContext, buildCoachPrompt } = require('../services/resumeContext');
 
 const upload = multer({
   dest: path.join(__dirname, '../uploads/'),
@@ -27,6 +24,88 @@ async function getDbUserId(req) {
   const result = await pool.query('SELECT id FROM users WHERE clerk_id = $1', [clerkId]);
   if (!result.rows.length) throw new Error('User not found. Please sync first.');
   return result.rows[0].id;
+}
+
+// ── Extract skills from JD text using Gemini ─────────────────────────────
+// Returns array of actual skill names (not generic keywords)
+async function extractSkillsFromJD(jdText) {
+  try {
+    const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+    const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
+
+    const prompt = `Extract only technical SKILLS from this job description. 
+Skills are: programming languages, frameworks, libraries, tools, platforms, databases, methodologies.
+NOT skills: soft skills, generic phrases like "communication", "teamwork", "problem solving", years of experience, educational requirements, or vague terms.
+
+Examples of SKILLS: Python, React, Node.js, PostgreSQL, AWS, Docker, LangChain, REST APIs, Git, TensorFlow, MongoDB
+Examples of NOT skills: "strong communication", "5 years experience", "bachelor's degree", "team player", "fast learner"
+
+Job Description:
+${jdText.slice(0, 3000)}
+
+Return ONLY a JSON array of skill strings. No explanation, no markdown:
+["skill1", "skill2", "skill3"]`;
+
+    const result = await model.generateContent(prompt);
+    const text = result.response.text().trim().replace(/```json|```/g, '').trim();
+    const skills = JSON.parse(text);
+    return Array.isArray(skills) ? skills.map(s => s.toLowerCase().trim()).filter(s => s.length > 1 && s.length < 50) : [];
+  } catch (err) {
+    console.error('Skill extraction error:', err.message);
+    console.log("error in fetching top skills : ",err);
+    return [];
+  }
+}
+
+// ── Upsert skills into frequency table ───────────────────────────────────
+async function upsertSkillFrequency(userId, skills) {
+  if (!skills || skills.length === 0) return;
+  for (const skill of skills) {
+    try {
+      await pool.query(
+        `INSERT INTO skills_frequency (user_id, skill_name, frequency, updated_at)
+         VALUES ($1, $2, 1, NOW())
+         ON CONFLICT (user_id, skill_name)
+         DO UPDATE SET frequency = skills_frequency.frequency + 1, updated_at = NOW()`,
+        [userId, skill]
+      );
+    } catch (e) {
+      // silent — don't break save-tailoring if skill upsert fails
+    }
+  }
+}
+
+// ── Backfill skills from existing tailoring records ───────────────────────
+// Called once per user when they open dashboard — idempotent
+async function backfillSkillsForUser(userId) {
+  try {
+    // Check if backfill already done (skills_frequency has entries for this user)
+    const existing = await pool.query(
+      'SELECT COUNT(*) as count FROM skills_frequency WHERE user_id = $1',
+      [userId]
+    );
+    if (parseInt(existing.rows[0].count) > 0) return; // already done
+
+    // Get all JD texts from tailoring sessions
+    const tailorings = await pool.query(
+      'SELECT jd_text FROM job_tailoring WHERE user_id = $1 AND jd_text IS NOT NULL',
+      [userId]
+    );
+
+    if (tailorings.rows.length === 0) return;
+
+    console.log(`🔄 Backfilling skills for user ${userId} from ${tailorings.rows.length} tailoring sessions`);
+
+    for (const row of tailorings.rows) {
+      if (!row.jd_text || row.jd_text.trim().length < 50) continue;
+      const skills = await extractSkillsFromJD(row.jd_text);
+      await upsertSkillFrequency(userId, skills);
+    }
+
+    console.log(`✅ Backfill complete for user ${userId}`);
+  } catch (err) {
+    console.error('Backfill error:', err.message);
+  }
 }
 
 // ─── POST /api/resume/upload ───────────────────────────────────────────────
@@ -68,6 +147,10 @@ router.get('/me', requireAuth(), async (req, res) => {
   try {
     const userId = await getDbUserId(req);
     const resume = await getActiveResume(userId);
+
+    // Trigger backfill in background (non-blocking)
+    backfillSkillsForUser(userId).catch(() => {});
+
     res.json({ success: true, resume: resume || null });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
@@ -89,7 +172,6 @@ router.get('/history', requireAuth(), async (req, res) => {
 });
 
 // ─── POST /api/resume/analyze-job ─────────────────────────────────────────
-// Analyze resume against a pasted job description → returns ATS scores + improvements
 router.post('/analyze-job/:jobId', requireAuth(), async (req, res) => {
   try {
     const userId = await getDbUserId(req);
@@ -99,20 +181,17 @@ router.post('/analyze-job/:jobId', requireAuth(), async (req, res) => {
       return res.status(400).json({ success: false, error: 'Please provide a complete job description.' });
     }
 
-    // Get active resume
     const resume = await getActiveResume(userId);
     if (!resume) return res.status(400).json({ success: false, error: 'No resume found. Upload your resume first.' });
 
     const resumeContext = buildResumeContext(resume);
 
-    // Get job info
     const jobResult = await pool.query('SELECT * FROM jobs WHERE id = $1 AND user_id = $2', [req.params.jobId, userId]);
     const job = jobResult.rows[0] || { title: 'Job', company: 'Company' };
 
     const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
     const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
 
-    // Build a list of sections that actually exist in this resume
     const resumeSections = Object.keys(resumeContext.analysis || {})
       .filter(k => !['name', 'email', 'phone', 'current_title', 'search_queries', 'years_experience', 'location'].includes(k))
       .filter(k => resumeContext.analysis[k] && (typeof resumeContext.analysis[k] !== 'string' || resumeContext.analysis[k].trim()))
@@ -183,7 +262,6 @@ ${sectionExamples}
 });
 
 // ─── POST /api/resume/save-tailoring/:jobId ───────────────────────────────
-// Save tailoring results for a specific job
 router.post('/save-tailoring/:jobId', requireAuth(), async (req, res) => {
   try {
     const userId = await getDbUserId(req);
@@ -199,6 +277,14 @@ router.post('/save-tailoring/:jobId', requireAuth(), async (req, res) => {
       [userId, req.params.jobId, jd_text, ats_score_before, ats_score_after,
        JSON.stringify(sections), missing_keywords ? JSON.stringify(missing_keywords) : null]
     );
+
+    // Extract skills from JD and update frequency map (non-blocking)
+    if (jd_text && jd_text.trim().length > 50) {
+      extractSkillsFromJD(jd_text)
+        .then(skills => upsertSkillFrequency(userId, skills))
+        .catch(err => console.error('Skill frequency update error:', err.message));
+    }
+
     res.json({ success: true, tailoring: result.rows[0] });
   } catch (err) {
     console.error('Save tailoring error:', err);
@@ -207,7 +293,6 @@ router.post('/save-tailoring/:jobId', requireAuth(), async (req, res) => {
 });
 
 // ─── GET /api/resume/tailoring/:jobId ────────────────────────────────────
-// Get saved tailoring for a job
 router.get('/tailoring/:jobId', requireAuth(), async (req, res) => {
   try {
     const userId = await getDbUserId(req);
@@ -238,7 +323,6 @@ router.get('/status', requireAuth(), async (req, res) => {
 });
 
 // ─── POST /api/resume/refresh-analysis ────────────────────────────────────
-// Re-analyze stored raw_text to refresh structured fields (projects, experience)
 router.post('/refresh-analysis', requireAuth(), async (req, res) => {
   try {
     const userId = await getDbUserId(req);
@@ -246,13 +330,11 @@ router.post('/refresh-analysis', requireAuth(), async (req, res) => {
     if (!resume?.raw_text || resume.raw_text.length < 100) {
       return res.status(400).json({ success: false, error: 'No resume text found. Please upload your resume again.' });
     }
-
     const analysis = await analyzeResume(resume.raw_text);
     await pool.query(
       `UPDATE resumes SET analysis = $1, search_queries = $2 WHERE id = $3`,
       [JSON.stringify(analysis), analysis.search_queries, resume.id]
     );
-
     res.json({ success: true, analysis, message: 'Resume analysis refreshed.' });
   } catch (err) {
     console.error('Refresh analysis error:', err);
@@ -272,18 +354,12 @@ router.post('/coach', requireAuth(), async (req, res) => {
 
     const resume = await getActiveResume(userId);
     if (!resume) {
-      return res.status(400).json({
-        success: false,
-        error: 'Upload your resume first to use the AI coach.',
-      });
+      return res.status(400).json({ success: false, error: 'Upload your resume first to use the AI coach.' });
     }
 
     const resumeContext = buildResumeContext(resume);
     if (!resumeContext.hasContent) {
-      return res.status(400).json({
-        success: false,
-        error: 'Your uploaded resume text could not be read. Please re-upload your PDF resume.',
-      });
+      return res.status(400).json({ success: false, error: 'Your uploaded resume text could not be read. Please re-upload your PDF resume.' });
     }
 
     console.log(`Coach: using complete resume (${resumeContext.charCount} chars) for user ${userId}`);
@@ -292,28 +368,13 @@ router.post('/coach', requireAuth(), async (req, res) => {
     let tailoring = null;
 
     if (jobId) {
-      const jobResult = await pool.query(
-        'SELECT * FROM jobs WHERE id = $1 AND user_id = $2',
-        [jobId, userId]
-      );
+      const jobResult = await pool.query('SELECT * FROM jobs WHERE id = $1 AND user_id = $2', [jobId, userId]);
       job = jobResult.rows[0] || null;
-
-      const tailoringResult = await pool.query(
-        'SELECT * FROM job_tailoring WHERE job_id = $1 AND user_id = $2',
-        [jobId, userId]
-      );
+      const tailoringResult = await pool.query('SELECT * FROM job_tailoring WHERE job_id = $1 AND user_id = $2', [jobId, userId]);
       tailoring = tailoringResult.rows[0] || null;
     }
 
-    const prompt = buildCoachPrompt({
-      resumeContext,
-      job,
-      tailoring,
-      context: jobId ? 'job' : context,
-      history,
-      message: message.trim(),
-    });
-
+    const prompt = buildCoachPrompt({ resumeContext, job, tailoring, context: jobId ? 'job' : context, history, message: message.trim() });
     const response = await coachWithContext({ prompt });
 
     res.json({ success: true, response });
@@ -327,3 +388,13 @@ router.post('/coach', requireAuth(), async (req, res) => {
 });
 
 module.exports = router;
+
+
+
+
+
+
+
+
+
+
