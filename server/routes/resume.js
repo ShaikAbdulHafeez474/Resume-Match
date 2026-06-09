@@ -9,6 +9,7 @@ const { extractTextFromPDF } = require('../services/pdfExtract');
 const { analyzeResume, coachWithContext } = require('../services/gemini');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 const { buildResumeContext, buildCoachPrompt } = require('../services/resumeContext');
+const { checkLimit, getPlan } = require('../middleware/planCheck');
 
 const upload = multer({
   dest: path.join(__dirname, '../uploads/'),
@@ -263,6 +264,8 @@ ${sectionExamples}
 
 // ─── POST /api/resume/save-tailoring/:jobId ───────────────────────────────
 router.post('/save-tailoring/:jobId', requireAuth(), async (req, res) => {
+  const limited = await checkLimit(req, res, 'tailor');
+  if (limited) return;
   try {
     const userId = await getDbUserId(req);
     const { jd_text, ats_score_before, ats_score_after, sections, missing_keywords } = req.body;
@@ -345,6 +348,12 @@ router.post('/refresh-analysis', requireAuth(), async (req, res) => {
 // ─── POST /api/resume/coach ───────────────────────────────────────────────
 router.post('/coach', requireAuth(), async (req, res) => {
   try {
+    // Elite-only feature
+    const { plan } = await getPlan(req);
+    if (plan !== 'elite') {
+      return res.status(403).json({ success: false, error: 'AI Coach is an Elite feature. Upgrade to unlock.', upgrade: true, feature: 'coach' });
+    }
+
     const userId = await getDbUserId(req);
     const { message, history = [], jobId = null, context = 'resume' } = req.body;
 

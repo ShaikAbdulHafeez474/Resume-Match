@@ -4,6 +4,7 @@ const { requireAuth, getAuth } = require('@clerk/express');
 const { pool, getActiveResume } = require('../db');
 const { scrapeJobs }              = require('../services/apify');
 const { scoreJobsAgainstResume }  = require('../services/gemini');
+const { checkLimit }              = require('../middleware/planCheck');
 
 async function getDbUserId(req) {
   const { userId: clerkId } = getAuth(req);
@@ -14,6 +15,8 @@ async function getDbUserId(req) {
 
 // ─── POST /api/jobs/fetch ──────────────────────────────────────────────────
 router.post('/fetch', requireAuth(), async (req, res) => {
+  const limited = await checkLimit(req, res, 'fetch');
+  if (limited) return;
   try {
     const userId = await getDbUserId(req);
     const { searchMode = 'resume', manualQuery = '' } = req.body;
@@ -391,6 +394,8 @@ router.post('/:id/restore', requireAuth(), async (req, res) => {
 
 // ─── PATCH /api/jobs/:id/score ────────────────────────────────────────────
 router.patch('/:id/score', requireAuth(), async (req, res) => {
+  const limited = await checkLimit(req, res, 'score');
+  if (limited) return;
   try {
     const userId = await getDbUserId(req);
 

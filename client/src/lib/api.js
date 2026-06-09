@@ -11,6 +11,26 @@ api.interceptors.request.use(async (config) => {
   return config
 })
 
+// Detect upgrade-required responses and surface them via a custom DOM event
+api.interceptors.response.use(
+  (response) => {
+    if (response.data?.upgrade === true) {
+      window.dispatchEvent(new CustomEvent('show-upgrade-modal', {
+        detail: { feature: response.data.feature || 'this feature' }
+      }))
+    }
+    return response
+  },
+  (error) => {
+    if (error.response?.data?.upgrade === true) {
+      window.dispatchEvent(new CustomEvent('show-upgrade-modal', {
+        detail: { feature: error.response.data.feature || 'this feature' }
+      }))
+    }
+    return Promise.reject(error)
+  }
+)
+
 // ── Auth ──────────────────────────────────────────────────────────────────
 export const syncUser = (email, name) => api.post('/auth/sync', { email, name })
 export const getMe    = ()            => api.get('/auth/me')
@@ -75,3 +95,14 @@ export const getResumeStatus = ()              => api.get('/resume/status')
 export const refreshResumeAnalysis = ()      => api.post('/resume/refresh-analysis', {}, { timeout: 120000 })
 export const chatWithCoach = ({ message, history = [], jobId = null, context = 'resume' }) =>
   api.post('/resume/coach', { message, history, jobId, context }, { timeout: 90000 })
+
+// ── Payment ───────────────────────────────────────────────────────────────
+export const createOrder     = (plan)       => api.post('/payment/create-order', { plan })
+export const verifyPayment   = (data)       => api.post('/payment/verify', data)
+export const getPaymentStatus = ()          => api.get('/payment/status')
+
+// ── Admin ─────────────────────────────────────────────────────────────────
+export const adminGetUsers   = (search, key) => api.get('/admin/users', { params: { search }, headers: { 'x-admin-key': key } })
+export const adminUpdatePlan = (id, plan, days, key) => api.patch(`/admin/users/${id}/plan`, { plan, days }, { headers: { 'x-admin-key': key } })
+export const adminRemovePlan = (id, key)     => api.delete(`/admin/users/${id}/plan`, { headers: { 'x-admin-key': key } })
+export const adminGetStats   = (key)         => api.get('/admin/stats', { headers: { 'x-admin-key': key } })

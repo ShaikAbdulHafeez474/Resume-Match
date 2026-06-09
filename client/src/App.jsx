@@ -1,7 +1,7 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { ClerkProvider, SignedIn, SignedOut, RedirectToSignIn, useUser } from '@clerk/clerk-react'
 import { Toaster } from 'sonner'
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import Navbar from './components/Navbar'
 import Sidebar from './components/Sidebar'
 import Landing from './pages/Landing'
@@ -13,6 +13,9 @@ import Resume from './pages/Resume'
 import Insights from './pages/Insights'
 import Settings from './pages/Settings'
 import TailorResume from './pages/TailorResume'
+import Pricing from './pages/Pricing'
+import Admin from './pages/Admin'
+import UpgradeModal from './components/UpgradeModal'
 import { syncUser } from './lib/api'
 
 const CLERK_PUBLISHABLE_KEY = import.meta.env.VITE_CLERK_PUBLISHABLE_KEY
@@ -51,11 +54,25 @@ function AppLayout({ children }) {
   )
 }
 
+function UpgradeModalController() {
+  const [modalFeature, setModalFeature] = useState(null)
+
+  useEffect(() => {
+    const handler = (e) => setModalFeature(e.detail?.feature || 'this feature')
+    window.addEventListener('show-upgrade-modal', handler)
+    return () => window.removeEventListener('show-upgrade-modal', handler)
+  }, [])
+
+  if (!modalFeature) return null
+  return <UpgradeModal feature={modalFeature} onClose={() => setModalFeature(null)} />
+}
+
 export default function App() {
   return (
     <ClerkProvider publishableKey={CLERK_PUBLISHABLE_KEY}>
       <BrowserRouter>
         <UserSync />
+        <UpgradeModalController />
         <Routes>
           {/* Root — Dashboard if signed in, Landing if not */}
           <Route path="/" element={
@@ -100,6 +117,12 @@ export default function App() {
 
           {/* TailorResume — kept for backward compat, full page no sidebar */}
           <Route path="/tailor/:jobId" element={<ProtectedRoute><TailorResume /></ProtectedRoute>} />
+
+          {/* Pricing — public */}
+          <Route path="/pricing" element={<Pricing />} />
+
+          {/* Admin — key-based auth, no Clerk */}
+          <Route path="/admin" element={<Admin />} />
 
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>

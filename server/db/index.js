@@ -111,6 +111,17 @@ async function initDB() {
   await pool.query(`ALTER TABLE jobs ADD COLUMN IF NOT EXISTS skip_reason VARCHAR(255)`);
   await pool.query(`ALTER TABLE job_tailoring ADD COLUMN IF NOT EXISTS missing_keywords JSONB`);
 
+  // Subscription & usage columns
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS plan VARCHAR(20) DEFAULT 'free'`);
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS plan_started_at TIMESTAMP`);
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS plan_expires_at TIMESTAMP`);
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS razorpay_payment_id VARCHAR(255)`);
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS razorpay_order_id VARCHAR(255)`);
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS fetch_count INTEGER DEFAULT 0`);
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS score_count INTEGER DEFAULT 0`);
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS tailor_count INTEGER DEFAULT 0`);
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS usage_reset_at TIMESTAMP DEFAULT NOW()`);
+
   console.log('✅ Database ready');
 }
 

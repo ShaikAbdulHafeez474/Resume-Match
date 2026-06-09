@@ -10,6 +10,8 @@ const jobRoutes           = require('./routes/jobs');
 const authRoutes          = require('./routes/auth');
 const dashboardRoutes     = require('./routes/dashboard');
 const optimizationsRoutes = require('./routes/optimizations');
+const paymentRoutes       = require('./routes/payment');
+const adminRoutes         = require('./routes/admin');
 
 const app  = express();
 const PORT = process.env.PORT || 5000;
@@ -27,6 +29,8 @@ app.use('/api/resume',        resumeRoutes);
 app.use('/api/jobs',          jobRoutes);
 app.use('/api/dashboard',     dashboardRoutes);
 app.use('/api/optimizations', optimizationsRoutes);
+app.use('/api/payment',       paymentRoutes);
+app.use('/api/admin',         adminRoutes);
 app.get('/api/health', (_, res) => res.json({ status: 'ok' }));
 
 // Uploads directory
